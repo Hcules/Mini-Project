@@ -1,0 +1,23 @@
+#include <MQ2.h>
+
+// use analog pin
+int pin = 34;
+float lpg, co, smoke;
+
+MQ2 mq2(pin);
+
+void setup()
+{
+  Serial.begin(9600);
+  mq2.begin();
+}
+
+void loop()
+{
+  
+  lpg = mq2.readLPG();
+  co = mq2.readCO();
+  smoke = mq2.readSmoke();
+  
+  delay(1000);
+}
