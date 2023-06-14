@@ -1,0 +1,37 @@
+// Pin connected to the MQ2 sensor's analog output
+const int sensorPin = A0;
+
+// Constants for the calibration curve
+const float R0 = 10.0;   // Sensor resistance at clean air
+const float RoCleanAir = 9.83;  // Resistance of clean air (R0 * (10 / 9.83))
+const float A = 3.267;   // Constant for the calibration curve
+const float B = 0.357;   // Constant for the calibration curve
+
+void setup() {
+  Serial.begin(9600);
+}
+
+void loop() {
+  // Read the sensor value
+  int sensorValue = analogRead(sensorPin);
+
+  // Calculate the sensor resistance
+  float voltage = sensorValue * (5.0 / 1023.0);
+  float sensorResistance = ((5.0 - voltage) / voltage) * 10.0;
+
+  // Calculate the gas concentration in PPM using the calibration curve
+  float ratio = sensorResistance / RoCleanAir;
+  float smokePPM = A * pow(ratio, B);
+  
+  // Calculate CO concentration in PPM assuming a linear relationship
+  float coPPM = map(sensorValue, 0, 1023, 0, 1000);
+
+  // Print the gas concentrations in PPM
+  Serial.print("Smoke concentration (PPM): ");
+  Serial.println(smokePPM);
+
+  Serial.print("CO concentration (PPM): ");
+  Serial.println(coPPM);
+
+  delay(1000);
+}
