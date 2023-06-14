@@ -1,0 +1,502 @@
+#include <Arduino.h>
+
+#if defined(ESP32)
+#include <WiFi.h>
+#elif defined(ESP8266)
+#include <ESP8266WiFi.h>
+#endif
+
+#include <Firebase_ESP_Client.h>
+
+#include <addons/TokenHelper.h>
+
+#include <addons/RTDBHelper.h>
+
+#include <MQUnifiedsensor.h>
+
+#include <TinyGPS++.h>
+
+#include <SoftwareSerial.h>
+
+#include <Adafruit_MPU6050.h>
+
+#include <Adafruit_Sensor.h>
+
+#include <Wire.h>
+
+#include <SD.h>
+
+#include "BluetoothSerial.h"
+
+#include <ELMduino.h>
+
+static const int RXPin = 23, TXPin = 25;
+static const uint32_t GPSBaud = 9600;
+
+ELM327 myELM327;
+
+TinyGPSPlus gps;
+
+SoftwareSerial ss(RXPin, TXPin);
+
+Adafruit_MPU6050 mpu;
+
+BluetoothSerial SerialBT;
+
+#define DEBUG_PORT Serial
+#define ELM_PORT   SerialBT
+
+#define WIFI_SSID "Galaxy M21611F"
+#define WIFI_PASSWORD "12345678123"
+
+#define API_KEY "AIzaSyAam-r-0enLfTDm0rxWOgWcyKNrJUkz1kU"
+
+#define DATABASE_URL "smartcarr-18-default-rtdb.asia-southeast1.firebasedatabase.app"
+
+#define USER_EMAIL "esp@node.com"
+#define USER_PASSWORD "albusseverus"
+
+#define placa "ESP-32"
+#define Voltage_Resolution 3.3
+#define pin 34
+#define type "MQ-135"
+#define ADC_Bit_Resolution 12
+#define RatioMQ135CleanAir 3.6
+
+#define SD_CS_PIN 5
+
+float rpm;
+float speed_kmph;
+float speed_mph;
+uint64_t currentTime = millis();
+uint64_t previousTime = currentTime;
+uint16_t samplePeriod = 100;
+
+
+
+double CO2 = (0);
+MQUnifiedsensor MQ135(placa, Voltage_Resolution, ADC_Bit_Resolution, pin, type);
+
+FirebaseData fbdo;
+
+FirebaseAuth auth;
+FirebaseConfig config;
+
+double latitude;
+double longitude;
+
+unsigned long sendDataPrevMillis = 0;
+
+const int relay1 = 27;//light
+const int relay2 = 19;
+const int relay3 = 21;//engine
+const int relay4 = 22;//lock
+
+double threshold_value = 10.00;
+
+File dataFile;
+File dataFile1;
+File dataFile2;
+
+int16_t ax, ay, az;
+
+unsigned long timer = 0;
+
+void mpucalibration(){
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  Serial.print("Accelerometer range set to: ");
+  switch (mpu.getAccelerometerRange()) {
+  case MPU6050_RANGE_2_G:
+    Serial.println("+-2G");
+    break;
+  case MPU6050_RANGE_4_G:
+    Serial.println("+-4G");
+    break;
+  case MPU6050_RANGE_8_G:
+    Serial.println("+-8G");
+    break;
+  case MPU6050_RANGE_16_G:
+    Serial.println("+-16G");
+    break;
+  }
+  // Range sensor gyroscope
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  Serial.print("Gyro range set to: ");
+  switch (mpu.getGyroRange()) {
+  case MPU6050_RANGE_250_DEG:
+    Serial.println("+- 250 deg/s");
+    break;
+  case MPU6050_RANGE_500_DEG:
+    Serial.println("+- 500 deg/s");
+    break;
+  case MPU6050_RANGE_1000_DEG:
+    Serial.println("+- 1000 deg/s");
+    break;
+  case MPU6050_RANGE_2000_DEG:
+    Serial.println("+- 2000 deg/s");
+    break;
+  }
+  // filter bandwidth
+  mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
+  Serial.print("Filter bandwidth set to: ");
+  switch (mpu.getFilterBandwidth()) {
+  case MPU6050_BAND_260_HZ:
+    Serial.println("260 Hz");
+    break;
+  case MPU6050_BAND_184_HZ:
+    Serial.println("184 Hz");
+    break;
+  case MPU6050_BAND_94_HZ:
+    Serial.println("94 Hz");
+    break;
+  case MPU6050_BAND_44_HZ:
+    Serial.println("44 Hz");
+    break;
+  case MPU6050_BAND_21_HZ:
+    Serial.println("21 Hz");
+    break;
+  case MPU6050_BAND_10_HZ:
+    Serial.println("10 Hz");
+    break;
+  case MPU6050_BAND_5_HZ:
+    Serial.println("5 Hz");
+    break;
+  }
+}
+
+
+
+enum fsm{
+  get_speed, 
+  get_rpm};
+fsm state = get_rpm;
+
+void setup() {
+  ss.begin(GPSBaud);
+  Serial.begin(115200);
+
+  Serial.println("Initializing...");
+  delay(1000);
+
+  MQ135.setRegressionMethod(1);
+
+  Serial.print("Calibrating please wait.");
+  float calcR0 = 0;
+  for (int i = 1; i <= 10; i++) {
+    MQ135.update();
+    calcR0 += MQ135.calibrate(RatioMQ135CleanAir);
+    Serial.print(".");
+  }
+  MQ135.setR0(calcR0 / 10);
+  Serial.println("  done!.");
+  
+  ELM_PORT.begin("ESP32test", true);
+  DEBUG_PORT.println("Attempting to connect to ELM327...");
+
+  if (!ELM_PORT.connect("OBDII"))
+  {
+    DEBUG_PORT.println("Couldn't connect to OBD scanner");
+    while(1);
+  }
+
+  DEBUG_PORT.println("Connected to ELM327");
+  DEBUG_PORT.println("Ensure your serial monitor line ending is set to 'Carriage Return'");
+  DEBUG_PORT.println("Type and send commands/queries to your ELM327 through the serial monitor");
+  DEBUG_PORT.println();
+  
+
+  
+  if (!SD.begin(SD_CS_PIN)) {
+    Serial.println("Failed to initialize SD card");
+    while (1);
+  }
+  Serial.println("SD card initialized successfully");
+
+  dataFile = SD.open("gyrodata.txt", FILE_WRITE);
+  if (!dataFile) {
+   Serial.println("Failed to open data.txt");
+   while (1);
+  }
+  Serial.println("gyrodata.txt opened successfully");
+
+  dataFile1 = SD.open("GPS_Reading.txt", FILE_WRITE);
+  if (!dataFile1) {
+    Serial.println("Failed to open data.txt");
+    while (1);
+  }
+  Serial.println("GPS_Reading.txt opened successfully");
+  
+  dataFile2 = SD.open("OBD_Reading.txt", FILE_WRITE);
+  if (!dataFile2) {
+    Serial.println("Failed to open data.txt");
+    while (1);
+  }
+  Serial.println("OBD_Reading.txt opened successfully");
+
+  while (!Serial)
+    delay(10); // will pause Zero, Leonardo, etc until serial console opens
+  Serial.println("Adafruit MPU6050 test!");
+
+  // Inisialisasi sensor MPU-6050
+  if (!mpu.begin()) {
+    Serial.println("Failed to find MPU6050 chip");
+    while (1) {
+      delay(10);
+    }
+  }
+  Serial.println("MPU6050 Found!");
+
+  mpucalibration();
+
+  Serial.begin(115200);
+  
+  delay(2000);
+
+  myELM327.begin(Serial);
+
+ 
+  if (isinf(calcR0)) {
+    Serial.println("Warning: Conection issue, R0 is infinite (Open circuit detected) please check your wiring and supply");
+    // while(1);
+  }
+  if (calcR0 == 0) {
+    Serial.println("Warning: Conection issue found, R0 is zero (Analog pin shorts to ground) please check your wiring and supply");
+    // while(1);
+  }
+
+  pinMode(relay1, OUTPUT);
+  pinMode(relay2, OUTPUT);
+  pinMode(relay3, OUTPUT);
+  pinMode(relay4, OUTPUT);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(300);
+  }
+  Serial.println();
+  Serial.print("Connected with IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
+
+  Serial.printf("Firebase Client v%s\n\n", FIREBASE_CLIENT_VERSION);
+
+  config.api_key = API_KEY;
+
+  auth.user.email = USER_EMAIL;
+
+  auth.user.password = USER_PASSWORD;
+
+  config.database_url = DATABASE_URL;
+
+  config.token_status_callback = tokenStatusCallback;
+
+  fbdo.setResponseSize(2048);
+
+  Firebase.begin(&config, &auth);
+
+  Firebase.reconnectWiFi(true);
+
+  Firebase.setDoubleDigits(5);
+
+  config.timeout.serverResponse = 10 * 1000;
+}
+
+
+
+
+
+void loop() {
+  while (ss.available() > 0) {
+    gps.encode(ss.read());
+    if (gps.location.isUpdated()) {
+      latitude = gps.location.lat();
+      longitude = gps.location.lng();
+      if (Firebase.ready() && (millis() - sendDataPrevMillis > 1000 || sendDataPrevMillis == 0)) {
+        Serial.printf("Set current longitude... %s\n", Firebase.RTDB.setDouble(&fbdo, F("/device/longitude"), longitude) ? "ok" : fbdo.errorReason().c_str());
+        Serial.printf("Set current latitude... %s\n", Firebase.RTDB.setDouble(&fbdo, F("/device/latitude"), latitude) ? "ok" : fbdo.errorReason().c_str());
+      }
+    }
+  }
+
+  if (Firebase.ready() && (millis() - sendDataPrevMillis > 1000 || sendDataPrevMillis == 0)) {
+    sendDataPrevMillis = millis();
+
+    bool updateNode;
+    Serial.printf("Get updateNode ref... %s\n", Firebase.RTDB.getBool(&fbdo, F("/device/updateNode"), &updateNode) ? updateNode ? "true" : "false" : fbdo.errorReason().c_str());
+    if (updateNode) {
+      bool relay_1;
+      Serial.printf("Get relay1 ref... %s\n", Firebase.RTDB.getBool(&fbdo, F("/device/relay1"), &relay_1) ? relay_1 ? "true" : "false" : fbdo.errorReason().c_str());
+      relay_1 ? digitalWrite(relay1, HIGH) : digitalWrite(relay1, LOW);
+
+      bool relay_2;
+      Serial.printf("Get relay2 ref... %s\n", Firebase.RTDB.getBool(&fbdo, F("/device/relay2"), &relay_2) ? relay_2 ? "true" : "false" : fbdo.errorReason().c_str());
+      !relay_2 ? digitalWrite(relay2, HIGH) : digitalWrite(relay2, LOW);
+
+      bool relay_3;
+      Serial.printf("Get relay3 ref... %s\n", Firebase.RTDB.getBool(&fbdo, F("/device/relay3"), &relay_3) ? relay_3 ? "true" : "false" : fbdo.errorReason().c_str());
+      !relay_3 ? digitalWrite(relay3, HIGH) : digitalWrite(relay3, LOW);
+
+      bool relay_4;
+      Serial.printf("Get relay4 ref... %s\n", Firebase.RTDB.getBool(&fbdo, F("/device/relay4"), &relay_4) ? relay_4 ? "true" : "false" : fbdo.errorReason().c_str());
+      relay_4 ? digitalWrite(relay4, HIGH) : digitalWrite(relay4, LOW);
+
+      Serial.printf("Set updateNode... %s\n", Firebase.RTDB.setBool(&fbdo, F("/device/updateNode"), false) ? "ok" : fbdo.errorReason().c_str());
+    }
+
+    MQ135.update();
+    MQ135.setA(605.18);
+    MQ135.setB(-3.937);
+    float CO = MQ135.readSensor();
+
+    Serial.printf("Set co... %s\n", Firebase.RTDB.setString(&fbdo, F("/device/co"), (String(CO))) ? "ok" : fbdo.errorReason().c_str());
+
+    MQ135.setA(77.255);
+    MQ135.setB(-3.18);
+    float Alcohol = MQ135.readSensor();
+
+    Serial.printf("Set alcohol... %s\n", Firebase.RTDB.setString(&fbdo, F("/device/alcohol"), (String(Alcohol))) ? "ok" : fbdo.errorReason().c_str());
+
+    MQ135.setA(110.47);
+    MQ135.setB(-2.862);
+    float CO2 = MQ135.readSensor();
+
+    Serial.printf("Set co2... %s\n", Firebase.RTDB.setString(&fbdo, F("/device/co2"), (String(CO2))) ? "ok" : fbdo.errorReason().c_str());
+
+    MQ135.setA(44.947);
+    MQ135.setB(-3.445);
+    float Toluen = MQ135.readSensor();
+
+    Serial.printf("Set Toluen... %s\n", Firebase.RTDB.setString(&fbdo, F("/device/toluen"), (String(Toluen))) ? "ok" : fbdo.errorReason().c_str());
+
+    MQ135.setA(102.2);
+    MQ135.setB(-2.473);
+    float NH4 = MQ135.readSensor();
+
+    Serial.printf("Set NH4... %s\n", Firebase.RTDB.setString(&fbdo, F("/device/nh4"), (String(NH4))) ? "ok" : fbdo.errorReason().c_str());
+
+    MQ135.setA(34.668);
+    MQ135.setB(-3.369);
+    float Aceton = MQ135.readSensor();
+
+    Serial.printf("Set Aceton... %s\n", Firebase.RTDB.setString(&fbdo, F("/device/acetone"), (String(Aceton))) ? "ok" : fbdo.errorReason().c_str());
+
+    Serial.print(CO);
+
+    Serial.print(Alcohol);
+
+    Serial.print(CO2);
+
+    Serial.print(Toluen);
+
+    Serial.print(NH4);
+
+    Serial.print(Aceton);
+
+    delay(500);
+  }
+    sensors_event_t a, g, temp;
+    mpu.getEvent(&a, &g, &temp);
+    float pitch = atan2(ay, sqrt(ax * ax + az * az)) * 180 / PI;
+  float roll = atan2(-ax, sqrt(ay * ay + az * az)) * 180 / PI;
+  float yaw = atan2(ay, ax) * 180 / PI;
+
+  if ((millis() - timer) > 500) { // print data every 500ms that is 0.5 s
+    Serial.print("Pitch");
+    Serial.println(pitch);
+    Serial.print("roll");
+    Serial.println(roll);
+    Serial.print("Yaw");
+    Serial.println(yaw);
+    dataFile.print("Roll: ");
+    dataFile.print(roll);
+    dataFile.print(", Pitch: ");
+    dataFile.println(pitch);
+    dataFile.print(", Yaw: ");
+    dataFile.println(yaw);
+ 
+  }
+
+  if(DEBUG_PORT.available())
+  {
+    char c = DEBUG_PORT.read();
+
+    DEBUG_PORT.write(c);
+    ELM_PORT.write(c);
+  }
+
+  if(ELM_PORT.available())
+  {
+    char c = ELM_PORT.read();
+
+    if(c == '>'){
+      DEBUG_PORT.println();
+
+      DEBUG_PORT.write(c);
+    }
+  }
+
+  currentTime = millis();
+  if((currentTime - previousTime) >= samplePeriod)
+  {
+    previousTime = currentTime;
+
+    switch(state)
+    {
+      case get_rpm:
+        if(myELM327.queryRPM(rpm))
+        {
+          updateLEDs();
+        }
+        else
+          Serial.println("\tTimeout");
+        state = get_speed;
+        break;
+        
+      case get_speed:
+        if(myELM327.querySpeed(speed_kmph))
+        {
+          speed_mph = speed_kmph * 0.621371;
+          updateLEDs();
+        }
+        else
+          Serial.println("\tTimeout");
+        state = get_rpm;
+      break;
+    }
+
+    dataFile2.println("Latitude: ");
+    dataFile2.print(gps.location.lat(), 6);
+    dataFile2.println(" Longitude: ");
+    dataFile2.println(gps.location.lng(), 6);
+
+  }
+
+  while (gpsSerial.available() > 0) 
+  {
+    if (gps.encode(gpsSerial.read())) 
+    {
+      // If valid GPS data is received, print the information
+      if (gps.location.isValid()) {
+        Serial.print("Latitude: ");
+        Serial.println(gps.location.lat(), 6);
+        Serial.print("Longitude: ");
+        Serial.println(gps.location.lng(), 6);
+        
+        dataFile1.println("Latitude: ");
+        dataFile1.print(gps.location.lat(), 6);
+        dataFile1.println(" Longitude: ");
+        dataFile1.println(gps.location.lng(), 6);
+
+      }
+    }
+  } 
+}
+
+
+void updateLEDs()
+{
+  Serial.print(rpm); Serial.print(" "); Serial.println(speed_mph);
+  
+  return;
+}
