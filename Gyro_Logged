@@ -1,0 +1,74 @@
+#include <Adafruit_MPU6050.h>
+
+#include <MPU6050_light.h>
+
+#include <MPU6050reg.h>
+
+#include <MPU6050.h>
+
+//We calculate the pitch and roll angles using the accelerometer data. The pitch angle is the angle between the x-z plane and the y-axis, and the roll angle is the angle between the y-z plane and the x-axis.
+
+#include <Wire.h>
+#include <SPI.h>
+#include <SD.h>
+#include <Adafruit_Sensor.h>
+
+
+#define SD_CS_PIN 5
+
+File dataFile;
+
+Adafruit_MPU6050 mpu;
+
+void setup() {
+  Serial.begin(9600);
+  while (!Serial) {}
+
+  if (!SD.begin(SD_CS_PIN)) {
+    Serial.println("Failed to initialize SD card");
+    while (1);
+  }
+  Serial.println("SD card initialized successfully");
+
+  if (!mpu.begin()) {
+    Serial.println("Failed to initialize MPU6050");
+    while (1);
+  }
+  Serial.println("MPU6050 initialized successfully");
+
+  dataFile = SD.open("data.txt", FILE_WRITE);
+  if (!dataFile) {
+    Serial.println("Failed to open data.txt");
+    while (1);
+  }
+  Serial.println("data.txt opened successfully");
+}
+
+void loop() 
+{
+   // Read the raw accelerometer data
+  int16_t ax, ay, az;
+  mpu.getCycleRate(&ax, &ay, &az);
+
+  // Read the raw gyroscope data
+  int16_t gx, gy, gz;
+  mpu.getRotation(&gx, &gy, &gz);
+
+  // Calculate the pitch and roll angles using the accelerometer data
+  float pitch = atan2(ay, sqrt(ax * ax + az * az)) * 180 / PI;
+  float roll = atan2(-ax, sqrt(ay * ay + az * az)) * 180 / PI;
+
+
+//We use the atan2() function to calculate the angles from the accelerometer values, and convert the result to degrees using the 180 / PI factor.
+  dataFile.print("Roll: ");
+  dataFile.print(roll);
+  dataFile.print(", Pitch: ");
+  dataFile.println(pitch);
+
+  Serial.print("Roll: ");
+  Serial.print(roll);
+  Serial.print(", Pitch: ");
+  Serial.println(pitch);
+
+  delay(1000);
+}
