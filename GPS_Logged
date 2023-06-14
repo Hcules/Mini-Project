@@ -1,0 +1,53 @@
+#include <TinyGPS++.h>
+#include <Wire.h>
+#include <SD.h>
+// Define the GPS module connection pins
+#define GPS_RX_PIN 38
+#define GPS_TX_PIN 39
+#define SD_CS_PIN 5
+
+// Create a hardware serial object for the GPS module
+HardwareSerial gpsSerial(1);
+
+// Create a TinyGPS++ object
+TinyGPSPlus gps;
+
+File dataFile1;
+
+void setup() {
+  // Start the serial communication
+  Serial.begin(9600);
+  gpsSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+  if (!SD.begin(SD_CS_PIN)) {
+    Serial.println("Failed to initialize SD card");
+    while (1);
+  }
+  Serial.println("SD card initialized successfully");
+  dataFile1 = SD.open("GPS_Reading.txt", FILE_WRITE);
+  if (!dataFile1) {
+    Serial.println("Failed to open data.txt");
+    while (1);
+  }
+  Serial.println("GPS_Reading.txt opened successfully");
+}
+
+void loop() {
+  // Read data from the GPS module
+  while (gpsSerial.available() > 0) {
+    if (gps.encode(gpsSerial.read())) {
+      // If valid GPS data is received, print the information
+      if (gps.location.isValid()) {
+        Serial.print("Latitude: ");
+        Serial.println(gps.location.lat(), 6);
+        Serial.print("Longitude: ");
+        Serial.println(gps.location.lng(), 6);
+        
+        dataFile1.println("Latitude: ");
+        dataFile1.print(gps.location.lat(), 6);
+        dataFile1.println(" Longitude: ");
+        dataFile1.println(gps.location.lng(), 6);*/
+
+      }
+    }
+  }
+}
